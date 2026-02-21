@@ -21,6 +21,48 @@ const getWallet = () => {
   return new ethers.Wallet(privateKey, getProvider());
 };
 
+
+// ============================================================================
+// WHITELIST MIDDLEWARE
+// ============================================================================
+
+let _whitelistCache = null;
+let _whitelistCacheTime = 0;
+const WHITELIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchWhitelist() {
+  const now = Date.now();
+  if (_whitelistCache && (now - _whitelistCacheTime) < WHITELIST_CACHE_TTL) {
+    return _whitelistCache;
+  }
+  try {
+    const res = await fetch('https://www.owockibot.xyz/api/whitelist');
+    const data = await res.json();
+    _whitelistCache = new Set(data.map(e => (e.address || e).toLowerCase()));
+    _whitelistCacheTime = now;
+    return _whitelistCache;
+  } catch (err) {
+    console.error('Whitelist fetch failed:', err.message);
+    if (_whitelistCache) return _whitelistCache;
+    return new Set();
+  }
+}
+
+function requireWhitelist(addressField = 'address') {
+  return async (req, res, next) => {
+    const addr = req.body?.[addressField] || req.body?.creator || req.body?.participant || req.body?.sender || req.body?.from || req.body?.address;
+    if (!addr) {
+      return res.status(400).json({ error: 'Address required' });
+    }
+    const whitelist = await fetchWhitelist();
+    if (!whitelist.has(addr.toLowerCase())) {
+      return res.status(403).json({ error: 'Invite-only. Tag @owockibot on X to request access.' });
+    }
+    next();
+  };
+}
+
+
 app.get('/', (req, res) => {
   res.json({
     name: 'Gift Circles',
@@ -72,7 +114,7 @@ app.get('/agent', (req, res) => {
 });
 
 // Create circle
-app.post('/circles', (req, res) => {
+app.post('/circles', requireWhitelist(), (req, res) => {
   const { name, fundingPool } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
   
@@ -97,7 +139,7 @@ app.get('/circles/:id', (req, res) => {
 });
 
 // Join circle
-app.post('/circles/:id/join', (req, res) => {
+app.post('/circles/:id/join', requireWhitelist(), (req, res) => {
   const circle = circles.get(req.params.id);
   if (!circle) return res.status(404).json({ error: 'Circle not found' });
   
@@ -116,7 +158,7 @@ app.post('/circles/:id/join', (req, res) => {
 });
 
 // Start new round
-app.post('/circles/:id/rounds', (req, res) => {
+app.post('/circles/:id/rounds', requireWhitelist(), (req, res) => {
   const circle = circles.get(req.params.id);
   if (!circle) return res.status(404).json({ error: 'Circle not found' });
   
@@ -152,7 +194,7 @@ app.get('/circles/:id/rounds/:roundId', (req, res) => {
 });
 
 // Allocate gifts
-app.post('/circles/:id/rounds/:roundId/allocate', (req, res) => {
+app.post('/circles/:id/rounds/:roundId/allocate', requireWhitelist(), (req, res) => {
   const circle = circles.get(req.params.id);
   if (!circle) return res.status(404).json({ error: 'Circle not found' });
   
@@ -192,7 +234,7 @@ app.post('/circles/:id/rounds/:roundId/allocate', (req, res) => {
 });
 
 // Finalize and distribute
-app.post('/circles/:id/rounds/:roundId/finalize', async (req, res) => {
+app.post('/circles/:id/rounds/:roundId/finalize', requireWhitelist(), async (req, res) => {
   const circle = circles.get(req.params.id);
   if (!circle) return res.status(404).json({ error: 'Circle not found' });
   
